@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -59,7 +60,7 @@ func (n *Node) listen() error {
 	ch := make(chan net.Conn)
 	cherr := make(chan error)
 	for {
-		n.accept(ch, cherr)
+		go n.accept(ch, cherr)
 		select {
 		case conn := <-ch:
 			hername, err := read(conn)
@@ -71,6 +72,9 @@ func (n *Node) listen() error {
 				return err
 			}
 			if err := write([]byte(n.Name), conn); err != nil {
+				return err
+			}
+			if err := write([]byte(n.PublicKey), conn); err != nil {
 				return err
 			}
 			n.Parties[string(hername)] = Party{
@@ -192,7 +196,7 @@ func read(r io.Reader) ([]byte, error) {
 	if _, err := r.Read(payload); err != nil {
 		return nil, err
 	}
-	return payload, nil
+	return bytes.Trim(payload, "\x00"), nil
 }
 
 func write(data []byte, w io.Writer) error {

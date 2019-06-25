@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"math/rand"
 	"sync"
 )
@@ -14,10 +15,19 @@ type Miner struct {
 	cancel chan struct{}
 }
 
+func NewMiner(cnf Config) *Miner {
+	return &Miner{
+		Consumer: NewConsumer(cnf),
+		stack:    make([]Transaction, 0),
+		cancel:   make(chan struct{}, 1),
+	}
+}
+
 func (m *Miner) Start() error {
 	if err := m.Consumer.Start(); err != nil {
 		return err
 	}
+	m.ReadAny(m.dataArrived)
 	go func() {
 		for {
 			m.mine()
@@ -50,8 +60,10 @@ func (m *Miner) txArrived(tx Transaction) {
 	if !tx.Verify(herpk) {
 		return
 	}
+	log.Println(m.Name, ": TX ARRIVED", tx)
 	m.mutex.Lock()
 	m.stack = append(m.stack, tx)
+	log.Println(m.stack)
 	m.mutex.Unlock()
 }
 
@@ -64,25 +76,32 @@ func (m *Miner) blockArrived(blk Block) {
 
 func (m *Miner) mine() {
 	prev := m.blockChain.Longest()
+	m.mutex.Lock()
 	blk := Block{
 		Creator:      m.Name,
 		PrevHash:     prev,
 		Transactions: m.stack,
 		ProveOfWork:  uint(rand.Uint32()),
 	}
-	for blk.Verify() {
+	m.stack = make([]Transaction, 0)
+	m.mutex.Unlock()
+	log.Println(m.Name, ": CALCULATING BLOCK", blk)
+	for {
 		select {
 		case <-m.cancel:
 			return
 		default:
 		}
+		blk.Hash = blk.CalcHash()
+		if blk.Verify() {
+			break
+		}
 		blk.ProveOfWork++
 	}
+	log.Println(m.Name, ": FOUND BLOCK!!", blk)
+	m.blockChain.Append(blk)
 	m.SendAll(BlockOrTransaction{
 		Type:  "block",
 		Block: &blk,
 	})
-	m.mutex.Lock()
-	m.stack = make([]Transaction, 0)
-	m.mutex.Unlock()
 }

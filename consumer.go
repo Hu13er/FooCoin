@@ -1,6 +1,10 @@
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"log"
+	"time"
+)
 
 type BlockOrTransaction struct {
 	Type        string       `json:"type"`
@@ -16,6 +20,9 @@ type Consumer struct {
 func NewConsumer(cnf Config) *Consumer {
 	return &Consumer{
 		Node: NewNode(cnf),
+		blockChain: BlockChain{
+			Blocks: make(map[Base64]blockMeta),
+		},
 	}
 }
 
@@ -26,6 +33,21 @@ func (c *Consumer) Start() error {
 	}
 	c.Node.ReadAny(c.dataArrived)
 	return nil
+}
+
+func (c *Consumer) NewTransaction(to string, value int) {
+	tx := Transaction{
+		From:  c.Name,
+		To:    to,
+		Value: value,
+		Time:  time.Now().UnixNano(),
+	}
+	tx.Sign(c.SecretKey)
+	log.Println(c.Name, ": SEND TX TO ALL", tx)
+	c.SendAll(BlockOrTransaction{
+		Type:        "transaction",
+		Transaction: &tx,
+	})
 }
 
 func (c *Consumer) dataArrived(from string, data []byte) {
@@ -44,7 +66,7 @@ func (c *Consumer) dataArrived(from string, data []byte) {
 	if !block.Verify() {
 		return
 	}
-
+	log.Println(c.Name, ": GOT BLOCK!")
 	c.blockChain.Append(*block)
 }
 

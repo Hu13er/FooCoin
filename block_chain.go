@@ -12,7 +12,7 @@ type Transaction struct {
 	From      string `json:"form"`
 	To        string `json:"to"`
 	Value     int    `json:"value"`
-	Time      uint   `json:"time"`
+	Time      int64  `json:"time"`
 	Signature Base64 `json:"sign"`
 }
 
@@ -56,7 +56,7 @@ func (b *Block) CalcHash() Base64 {
 
 func (b *Block) Verify() bool {
 	bytes := Base64ToBytes(b.Hash)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		if bytes[i] != 0 {
 			return false
 		}
