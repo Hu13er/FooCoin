@@ -1,19 +1,44 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
 	"net"
+	"sync"
 )
 
+type Config struct {
+	Name      string
+	Addr      string
+	PublicKey Base64
+	SecretKey Base64
+}
+
+type Party struct {
+	Name string
+	net.Conn
+	PublicKey Base64
+}
+
 type Node struct {
-	Name    string
-	Addr    string
-	Parties map[string]net.Conn
+	Config
+	Parties map[string]Party
 
 	listener *net.TCPListener
 	stop     chan struct{}
+	readers  []func(name string, data []byte)
+	mutex    sync.Mutex
+}
+
+func NewNode(cnf Config) *Node {
+	return &Node{
+		Config:  cnf,
+		Parties: make(map[string]Party),
+		stop:    make(chan struct{}, 1),
+		readers: make([]func(string, []byte), 0),
+	}
 }
 
 func (n *Node) Start() error {
@@ -41,10 +66,19 @@ func (n *Node) listen() error {
 			if err != nil {
 				return err
 			}
+			herpk, err := read(conn)
+			if err != nil {
+				return err
+			}
 			if err := write([]byte(n.Name), conn); err != nil {
 				return err
 			}
-			n.Parties[string(hername)] = conn
+			n.Parties[string(hername)] = Party{
+				Name:      string(hername),
+				PublicKey: Base64(herpk),
+				Conn:      conn,
+			}
+			go n.readConn(string(hername), conn)
 		case err := <-cherr:
 			return err
 		case <-n.stop:
@@ -74,15 +108,32 @@ func (n *Node) Connect(addr string) error {
 	if err := write([]byte(n.Name), conn); err != nil {
 		return err
 	}
+	if err := write([]byte(n.PublicKey), conn); err != nil {
+		return err
+	}
 	hername, err := read(conn)
 	if err != nil {
 		return err
 	}
-	n.Parties[string(hername)] = conn
+	herpk, err := read(conn)
+	if err != nil {
+		return err
+	}
+	n.Parties[string(hername)] = Party{
+		Name:      string(hername),
+		PublicKey: Base64(herpk),
+		Conn:      conn,
+	}
+	go n.readConn(string(hername), conn)
 	return nil
 }
 
-func (n *Node) SendAll(data []byte) {
+func (n *Node) SendAll(object interface{}) {
+	data, err := json.Marshal(object)
+	if err != nil {
+		log.Println("WARN:", err)
+		return
+	}
 	for _, p := range n.Parties {
 		err := write(data, p)
 		if err != nil {
@@ -91,7 +142,12 @@ func (n *Node) SendAll(data []byte) {
 	}
 }
 
-func (n *Node) Send(party string, data []byte) error {
+func (n *Node) Send(party string, object interface{}) error {
+	data, err := json.Marshal(object)
+	if err != nil {
+		log.Println("WARN:", err)
+		return err
+	}
 	conn, exists := n.Parties[party]
 	if !exists {
 		return errors.New("no party")
@@ -99,19 +155,25 @@ func (n *Node) Send(party string, data []byte) error {
 	return write(data, conn)
 }
 
-func (n *Node) ReadAny(f func(string, []byte)) {
-	for name, conn := range n.Parties {
-		go func(name string, conn net.Conn) {
-			for {
-				data, err := read(conn)
-				if err != nil {
-					log.Println("WARN:", err)
-					continue
-				}
-				f(name, data)
-			}
-		}(name, conn)
+func (n *Node) readConn(name string, conn net.Conn) {
+	for {
+		data, err := read(conn)
+		if err != nil {
+			log.Println("WARN:", err)
+			continue
+		}
+		n.mutex.Lock()
+		for _, reader := range n.readers {
+			reader(name, data)
+		}
+		n.mutex.Unlock()
 	}
+}
+
+func (n *Node) ReadAny(f func(string, []byte)) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	n.readers = append(n.readers, f)
 }
 
 func (n *Node) Stop() {

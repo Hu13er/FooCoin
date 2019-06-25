@@ -1,3 +1,3 @@
 # FooCoin
 
-a cryptocurrency based on blockchains.
+a cryptocurrency based on bitcoin structure.
